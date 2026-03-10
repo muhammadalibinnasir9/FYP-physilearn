@@ -20,13 +20,16 @@ class IsOwnerOrStaff(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if request.user.role == 'ADMIN':
             return True
+            
+        student = obj.student if hasattr(obj, 'student') else obj
+            
         if request.user.role == 'PARENT':
             # Parent has read-only access to their own children
             if request.method in permissions.SAFE_METHODS:
-                return obj.parent == request.user
+                return student.parent == request.user
             return False
         if request.user.role == 'TEACHER':
             # Teacher can view/edit their assigned students
-            return obj.teacher == request.user
+            return student.teacher == request.user
         return False
 

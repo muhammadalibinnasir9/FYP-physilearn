@@ -32,7 +32,7 @@ class HealthHistorySerializer(serializers.ModelSerializer):
 class FitnessPerformanceSerializer(serializers.ModelSerializer):
     class Meta:
         model = FitnessPerformance
-        fields = ('date', 'metric_name', 'score')
+        fields = ('id', 'student', 'date', 'metric_name', 'score')
 
 
 class HealthRecordSerializer(serializers.ModelSerializer):
@@ -42,7 +42,7 @@ class HealthRecordSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = HealthRecord
-        fields = ('height', 'weight', 'bmi', 'fitness_status', 'ai_recommendations', 'activity_record', 'fitness_test_scores')
+        fields = ('id', 'student', 'height', 'weight', 'bmi', 'fitness_status', 'ai_recommendations', 'activity_record', 'fitness_test_scores')
 
 
 class StudentSerializer(serializers.ModelSerializer):

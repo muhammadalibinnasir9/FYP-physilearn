@@ -1,0 +1,9 @@
+PASS: Admin can create new user
+FAIL: Admin can update user information
+PASS: Admin can delete user accounts
+PASS: No plain text passwords stored in DB
+PASS: Password hashed using secure algorithm: pbkdf2_sha256
+PASS: Password verification uses hash comparison correctly
+
+FINAL STATUS: FAIL
+ALGO DETECTED: pbkdf2_sha256

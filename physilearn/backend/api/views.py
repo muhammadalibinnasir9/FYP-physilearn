@@ -1,8 +1,8 @@
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework import status, generics
+from rest_framework import status, generics, viewsets
 from rest_framework.permissions import AllowAny
-from .serializers import RegisterSerializer, UserSerializer, StudentSerializer
+from .serializers import RegisterSerializer, UserSerializer, StudentSerializer, HealthRecordSerializer, FitnessPerformanceSerializer
 from .models import Student, HealthRecord, HealthHistory, FitnessPerformance
 from .permissions import IsOwnerOrStaff, IsAdmin, IsTeacher, IsParent
 from .reports import generate_student_pdf
@@ -39,10 +39,47 @@ class StudentListView(generics.ListCreateAPIView):
             return Student.objects.filter(parent=user)
         return Student.objects.none()
 
+class UserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all()
+    permission_classes = [IsAdmin]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return RegisterSerializer
+        return UserSerializer
+
 class StudentDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
     permission_classes = [IsOwnerOrStaff]
+
+class HealthRecordViewSet(viewsets.ModelViewSet):
+    serializer_class = HealthRecordSerializer
+    permission_classes = [IsOwnerOrStaff]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'ADMIN':
+            return HealthRecord.objects.all()
+        if user.role == 'TEACHER':
+            return HealthRecord.objects.filter(student__teacher=user)
+        if user.role == 'PARENT':
+            return HealthRecord.objects.filter(student__parent=user)
+        return HealthRecord.objects.none()
+
+class FitnessPerformanceViewSet(viewsets.ModelViewSet):
+    serializer_class = FitnessPerformanceSerializer
+    permission_classes = [IsOwnerOrStaff]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'ADMIN':
+            return FitnessPerformance.objects.all()
+        if user.role == 'TEACHER':
+            return FitnessPerformance.objects.filter(student__teacher=user)
+        if user.role == 'PARENT':
+            return FitnessPerformance.objects.filter(student__parent=user)
+        return FitnessPerformance.objects.none()
 
 class StudentReportView(generics.GenericAPIView):
     permission_classes = [IsOwnerOrStaff]
