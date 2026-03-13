@@ -23,11 +23,69 @@ class Student(models.Model):
     name = models.CharField(max_length=255)
     roll_number = models.CharField(max_length=50, unique=True, null=True, blank=True)
     section = models.CharField(max_length=50, null=True, blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
     parent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='children', limit_choices_to={'role': 'PARENT'})
     teacher = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='students', limit_choices_to={'role': 'TEACHER'})
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['section']),
+            models.Index(fields=['teacher']),
+            models.Index(fields=['section', 'teacher']),
+        ]
+
     def __str__(self):
         return f"{self.name} ({self.roll_number})"
+
+
+class TeacherSection(models.Model):
+    """Explicit mapping of teachers to sections/classes they are assigned to"""
+    teacher = models.ForeignKey(User, on_delete=models.CASCADE, related_name='assigned_sections', limit_choices_to={'role': 'TEACHER'})
+    section = models.CharField(max_length=50, db_index=True)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    assigned_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='section_assignments', limit_choices_to={'role': 'ADMIN'})
+
+    class Meta:
+        unique_together = ['teacher', 'section']
+        ordering = ['section']
+
+    def __str__(self):
+        return f"{self.teacher.username} - {self.section}"
+
+
+class AcademicTerm(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    is_active = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-start_date', 'name']
+
+    def __str__(self):
+        return self.name
+
+
+class FitnessTestParameter(models.Model):
+    term = models.ForeignKey(
+        AcademicTerm,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='fitness_parameters',
+    )
+    metric_name = models.CharField(max_length=100)
+    passing_score = models.FloatField()
+    max_score = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ('term', 'metric_name')
+        ordering = ['metric_name']
+
+    def __str__(self):
+        if self.term:
+            return f"{self.metric_name} ({self.term.name})"
+        return self.metric_name
 
 from .ai_logic import classify_bmi, generate_recommendations
 from .encryption import encrypt_value, decrypt_value
@@ -40,7 +98,7 @@ class HealthRecord(models.Model):
 
     fitness_status = models.CharField(max_length=50, null=True, blank=True)
     ai_recommendations = models.TextField(null=True, blank=True)
-    activity_record = models.TextField(help_text="Record of physical activities")
+    activity_record = models.TextField(null=True, blank=True, help_text="Record of physical activities")
 
     fitness_test_scores = models.JSONField(default=dict, help_text="Store scores as a JSON object")
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
@@ -89,7 +147,15 @@ class HealthRecord(models.Model):
             calculated_bmi = round(w / (height_m ** 2), 2)
             self.bmi = calculated_bmi
             self.fitness_status = classify_bmi(calculated_bmi)
-            self.ai_recommendations = generate_recommendations(self.fitness_status)
+            profile = {
+                'test_scores': self.fitness_test_scores or {},
+                'recent_performances': list(
+                    FitnessPerformance.objects.filter(student=self.student)
+                    .order_by('-date')
+                    .values('metric_name', 'score')[:10]
+                ),
+            }
+            self.ai_recommendations = generate_recommendations(self.fitness_status, student_profile=profile)
         
         super().save(*args, **kwargs)
         
@@ -132,4 +198,62 @@ class HealthHistory(models.Model):
 
     def __str__(self):
         return f"{self.student.name} - {self.date} (BMI: {self.bmi})"
+
+
+class PESession(models.Model):
+    """Physical Education Session for attendance tracking"""
+    name = models.CharField(max_length=200, help_text="Session name or topic")
+    date = models.DateField(db_index=True)
+    section = models.CharField(max_length=50, db_index=True, help_text="Class/section for this session")
+    teacher = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pe_sessions', limit_choices_to={'role': 'TEACHER'})
+    description = models.TextField(blank=True, help_text="Session description or activities")
+    start_time = models.TimeField(help_text="Session start time")
+    end_time = models.TimeField(help_text="Session end time")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-date', '-start_time']
+        unique_together = ['date', 'section', 'start_time']
+        indexes = [
+            models.Index(fields=['date', 'section']),
+            models.Index(fields=['teacher', 'date']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} - {self.section} ({self.date})"
+
+
+class Attendance(models.Model):
+    """Student attendance for PE sessions"""
+    PRESENT = 'PRESENT'
+    ABSENT = 'ABSENT'
+    EXCUSED = 'EXCUSED'
+    LATE = 'LATE'
+    
+    STATUS_CHOICES = [
+        (PRESENT, 'Present'),
+        (ABSENT, 'Absent'),
+        (EXCUSED, 'Excused'),
+        (LATE, 'Late'),
+    ]
+
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='attendances')
+    session = models.ForeignKey(PESession, on_delete=models.CASCADE, related_name='attendances')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=PRESENT)
+    notes = models.TextField(blank=True, help_text="Optional notes about attendance")
+    marked_at = models.DateTimeField(auto_now_add=True)
+    marked_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='marked_attendances', limit_choices_to={'role': 'TEACHER'})
+
+    class Meta:
+        ordering = ['-marked_at']
+        unique_together = ['student', 'session']
+        indexes = [
+            models.Index(fields=['session', 'status']),
+            models.Index(fields=['student', 'marked_at']),
+            models.Index(fields=['status', 'marked_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.student.name} - {self.status} ({self.session.date})"
 

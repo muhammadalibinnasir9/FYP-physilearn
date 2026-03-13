@@ -15,4 +15,8 @@ def encrypt_value(value):
 def decrypt_value(token):
     if token is None:
         return None
-    return cipher_suite.decrypt(token.encode()).decode()
+    try:
+        return cipher_suite.decrypt(token.encode()).decode()
+    except Exception:
+        # If decryption fails (e.g. key changed), return None instead of crashing
+        return None
