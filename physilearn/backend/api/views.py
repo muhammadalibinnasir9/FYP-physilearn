@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status, generics, viewsets, permissions
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.http import HttpResponse
-from .models import Student, HealthRecord, FitnessPerformance, AcademicTerm, FitnessTestParameter, TeacherSection, PESession, Attendance
+from .models import Student, HealthRecord, HealthHistory, FitnessPerformance, AcademicTerm, FitnessTestParameter, TeacherSection, PESession, Attendance
 from .permissions import IsAdmin, IsTeacher, IsParent
 from .reports import generate_student_pdf
 from django.db.models import Avg, Count, Q
@@ -20,6 +20,7 @@ from .serializers import (
 )
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.utils import timezone
+from notifications.signals import send_credential_brief_notification
 
 User = get_user_model()
 
@@ -99,6 +100,191 @@ class StudentAdminViewSet(viewsets.ModelViewSet):
 
 @api_view(['POST'])
 @permission_classes([IsAdmin])
+def create_user_view(request):
+    """
+    Unified admin endpoint to create Teacher or Parent accounts.
+    Body: username, email, password, first_name, last_name, role (TEACHER|PARENT).
+    - If role=TEACHER: sections (list or comma-separated) required.
+    - If role=PARENT: student_ids (list or comma-separated) required.
+    Passwords are hashed via Django's User.objects.create_user (set_password).
+    """
+    role = (request.data.get('role') or '').strip().upper()
+    if role not in ('TEACHER', 'PARENT'):
+        return Response(
+            {'role': ['Must be TEACHER or PARENT.']},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    username = (request.data.get('username') or '').strip()
+    email = (request.data.get('email') or '').strip()
+    password = request.data.get('password') or ''
+    first_name = (request.data.get('first_name') or '').strip()
+    last_name = (request.data.get('last_name') or '').strip()
+
+    if not username:
+        return Response({'username': ['This field is required.']}, status=status.HTTP_400_BAD_REQUEST)
+    if not email:
+        return Response({'email': ['This field is required.']}, status=status.HTTP_400_BAD_REQUEST)
+    if not password:
+        return Response({'password': ['This field is required.']}, status=status.HTTP_400_BAD_REQUEST)
+    if not first_name:
+        return Response({'first_name': ['This field is required.']}, status=status.HTTP_400_BAD_REQUEST)
+    if not last_name:
+        return Response({'last_name': ['This field is required.']}, status=status.HTTP_400_BAD_REQUEST)
+
+    if role == 'TEACHER':
+        raw_sections = request.data.get('sections') or []
+        if isinstance(raw_sections, str):
+            sections = [s.strip() for s in raw_sections.split(',') if s.strip()]
+        elif isinstance(raw_sections, list):
+            sections = [str(s).strip() for s in raw_sections if str(s).strip()]
+        else:
+            sections = []
+        if not sections:
+            return Response(
+                {'sections': ['At least one section is required (e.g., 7-A).']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            teacher = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+                role='TEACHER',
+            )
+            teacher_sections = [
+                TeacherSection(teacher=teacher, section=s, assigned_by=request.user)
+                for s in sections
+            ]
+            TeacherSection.objects.bulk_create(teacher_sections, ignore_conflicts=True)
+            updated = Student.objects.filter(section__in=sections).update(teacher=teacher)
+            send_credential_brief_notification(teacher, role_label="Teacher")
+        return Response(
+            {
+                'user': UserSerializer(teacher).data,
+                'role': 'TEACHER',
+                'sections': sections,
+                'students_assigned': updated,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    # role == 'PARENT'
+    raw_student_ids = request.data.get('student_ids') or []
+    if isinstance(raw_student_ids, str):
+        student_ids = [s.strip() for s in raw_student_ids.split(',') if s.strip()]
+    elif isinstance(raw_student_ids, list):
+        student_ids = [str(s).strip() for s in raw_student_ids if str(s).strip()]
+    else:
+        student_ids = []
+    try:
+        student_ids_int = [int(x) for x in student_ids]
+    except ValueError:
+        return Response({'student_ids': ['Student IDs must be integers.']}, status=status.HTTP_400_BAD_REQUEST)
+    if not student_ids_int:
+        return Response(
+            {'student_ids': ['At least one Student ID is required.']},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    existing_count = Student.objects.filter(id__in=student_ids_int).count()
+    if existing_count != len(set(student_ids_int)):
+        return Response({'student_ids': ['One or more Student IDs do not exist.']}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        parent = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            first_name=first_name,
+            last_name=last_name,
+            role='PARENT',
+        )
+        updated = Student.objects.filter(id__in=student_ids_int).update(parent=parent)
+        send_credential_brief_notification(parent, role_label="Parent")
+    return Response(
+        {
+            'user': UserSerializer(parent).data,
+            'role': 'PARENT',
+            'student_ids': student_ids_int,
+            'students_linked': updated,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def admin_sections_list_view(request):
+    """Return distinct section names (from Student and TeacherSection) for admin dropdowns."""
+    student_sections = set(
+        Student.objects.exclude(section__isnull=True)
+        .exclude(section='')
+        .values_list('section', flat=True)
+        .distinct()
+    )
+    teacher_sections = set(
+        TeacherSection.objects.values_list('section', flat=True).distinct()
+    )
+    sections = sorted(student_sections | teacher_sections)
+    return Response({'sections': sections}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def admin_teacher_sections_view(request, teacher_id):
+    """Get sections assigned to a teacher (for admin edit)."""
+    try:
+        teacher = User.objects.get(id=teacher_id, role='TEACHER')
+    except User.DoesNotExist:
+        return Response({'detail': 'Teacher not found.'}, status=status.HTTP_404_NOT_FOUND)
+    sections = list(
+        TeacherSection.objects.filter(teacher=teacher)
+        .values_list('section', flat=True)
+        .order_by('section')
+    )
+    return Response({'teacher_id': teacher_id, 'sections': sections}, status=status.HTTP_200_OK)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAdmin])
+def admin_teacher_sections_update_view(request, teacher_id):
+    """Update sections assigned to a teacher. Replaces existing assignments."""
+    try:
+        teacher = User.objects.get(id=teacher_id, role='TEACHER')
+    except User.DoesNotExist:
+        return Response({'detail': 'Teacher not found.'}, status=status.HTTP_404_NOT_FOUND)
+    raw = request.data.get('sections') or []
+    if isinstance(raw, str):
+        sections = [s.strip() for s in raw.split(',') if s.strip()]
+    elif isinstance(raw, list):
+        sections = [str(s).strip() for s in raw if str(s).strip()]
+    else:
+        sections = []
+    if not sections:
+        return Response(
+            {'sections': ['At least one section is required.']},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    with transaction.atomic():
+        TeacherSection.objects.filter(teacher=teacher).delete()
+        Student.objects.filter(teacher=teacher).update(teacher=None)  # unassign from old sections
+        for sec in sections:
+            TeacherSection.objects.create(
+                teacher=teacher,
+                section=sec,
+                assigned_by=request.user,
+            )
+        Student.objects.filter(section__in=sections).update(teacher=teacher)
+    return Response(
+        {'teacher_id': teacher_id, 'sections': sections},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAdmin])
 def create_teacher_and_assign_sections_view(request):
     username = (request.data.get('username') or '').strip()
     email = (request.data.get('email') or '').strip()
@@ -151,6 +337,9 @@ def create_teacher_and_assign_sections_view(request):
 
         # Also update existing students in those sections
         updated = Student.objects.filter(section__in=sections).update(teacher=teacher)
+
+        # Notify new teacher (credential brief)
+        send_credential_brief_notification(teacher, role_label="Teacher")
 
     return Response(
         {
@@ -213,6 +402,9 @@ def create_parent_and_link_students_view(request):
 
         updated = Student.objects.filter(id__in=student_ids_int).update(parent=parent)
 
+        # Notify new parent (credential brief)
+        send_credential_brief_notification(parent, role_label="Parent")
+
     return Response(
         {
             'parent': UserSerializer(parent).data,
@@ -221,6 +413,53 @@ def create_parent_and_link_students_view(request):
         },
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAdmin])
+def patch_parent_students_view(request, parent_id):
+    """Re-link a parent account to a new set of student IDs."""
+    raw_student_ids = request.data.get('student_ids') or []
+    if isinstance(raw_student_ids, str):
+        student_ids = [s.strip() for s in raw_student_ids.split(',') if s.strip()]
+    elif isinstance(raw_student_ids, list):
+        student_ids = [str(s).strip() for s in raw_student_ids if str(s).strip()]
+    else:
+        student_ids = []
+
+    try:
+        student_ids_int = [int(x) for x in student_ids]
+    except ValueError:
+        return Response({'student_ids': ['Student IDs must be integers.']}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not student_ids_int:
+        return Response({'student_ids': ['At least one Student ID is required.']}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        parent = User.objects.get(id=parent_id, role='PARENT')
+    except User.DoesNotExist:
+        return Response({'detail': 'Parent not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    existing_count = Student.objects.filter(id__in=student_ids_int).count()
+    if existing_count != len(set(student_ids_int)):
+        return Response({'student_ids': ['One or more Student IDs do not exist.']}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        # Remove old linkage for this parent
+        Student.objects.filter(parent=parent).update(parent=None)
+        # Set new linkage
+        updated = Student.objects.filter(id__in=student_ids_int).update(parent=parent)
+
+    return Response(
+        {
+            'parent': UserSerializer(parent).data,
+            'student_ids': student_ids_int,
+            'students_linked': updated,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 
 
 class IsAdminOrTeacher(permissions.BasePermission):
@@ -248,6 +487,10 @@ class HealthRecordViewSet(viewsets.ModelViewSet):
         return False
 
     def create(self, request, *args, **kwargs):
+        from django.utils import timezone
+        from .models import PESession, Attendance
+        import datetime
+        
         student_id = request.data.get('student')
         if not student_id:
             return Response({'student': ['This field is required.']}, status=status.HTTP_400_BAD_REQUEST)
@@ -260,10 +503,47 @@ class HealthRecordViewSet(viewsets.ModelViewSet):
         if not self._can_access_student(request.user, student):
             return Response({'detail': 'You do not have permission to update this student.'}, status=status.HTTP_403_FORBIDDEN)
 
+        # 1. Handle Health Record creation/update
         instance, _ = HealthRecord.objects.get_or_create(student=student)
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
+        
+        # 2. Handle Attendance simultaneously if provided
+        attendance_status = request.data.get('attendance_status')
+        if attendance_status and attendance_status in dict(Attendance.STATUS_CHOICES):
+            # Find or create a PESession for today for this section
+            today = timezone.now().date()
+            section = student.section
+            # We use an arbitrary default start/end time for auto-generated sessions
+            start_time = datetime.time(8, 0)
+            end_time = datetime.time(9, 0)
+            
+            # The PESession name should be identifiable as auto-generated if needed
+            session_name = f"Daily Check-in - {section}"
+            
+            session, _ = PESession.objects.get_or_create(
+                date=today,
+                section=section,
+                teacher=request.user,
+                defaults={
+                    'name': session_name,
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'description': "Auto-generated session from simultaneous health check-in"
+                }
+            )
+            
+            # Create or update Attendance for this student in this session
+            Attendance.objects.update_or_create(
+                student=student,
+                session=session,
+                defaults={
+                    'status': attendance_status,
+                    'marked_by': request.user
+                }
+            )
+
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def update(self, request, *args, **kwargs):

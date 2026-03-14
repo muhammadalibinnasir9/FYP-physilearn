@@ -1,8 +1,14 @@
 from rest_framework import permissions
 
 class IsAdmin(permissions.BasePermission):
+    """Only users with role ADMIN or is_staff=True can access admin management endpoints."""
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role == 'ADMIN'
+        if not request.user.is_authenticated:
+            return False
+        return (
+            getattr(request.user, 'role', None) == 'ADMIN' or
+            getattr(request.user, 'is_staff', False) is True
+        )
 
 class IsTeacher(permissions.BasePermission):
     def has_permission(self, request, view):

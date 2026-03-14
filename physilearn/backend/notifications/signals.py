@@ -48,6 +48,27 @@ def create_system_notification(users, title, message, priority="MEDIUM", action_
     
     Notification.objects.bulk_create(notifications)
 
+
+def send_credential_brief_notification(user, role_label):
+    """
+    Send an in-app credential brief to a newly created user (Teacher or Parent).
+    Does not include the temporary password; they use the one provided by the admin.
+    """
+    title = "Your PhysiLearn account is ready"
+    message = (
+        f"Your {role_label} account has been created. "
+        "Log in using your email and the temporary password provided by your administrator. "
+        "You can change your password after signing in."
+    )
+    create_system_notification(
+        users=[user],
+        title=title,
+        message=message,
+        priority="HIGH",
+        action_url="/login",
+        action_text="Log in",
+    )
+
 def create_announcement_notification(user_roles, title, message, priority="MEDIUM"):
     """Helper function to create role-specific announcements"""
     

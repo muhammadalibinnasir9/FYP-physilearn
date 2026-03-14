@@ -2,6 +2,7 @@ from django.db import models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.conf import settings
+from datetime import time
 import uuid
 
 # Get the custom User model
@@ -119,8 +120,8 @@ class NotificationPreference(models.Model):
     
     # Quiet hours
     quiet_hours_enabled = models.BooleanField(default=False)
-    quiet_hours_start = models.TimeField(default=models.TimeField(22, 0, 0))
-    quiet_hours_end = models.TimeField(default=models.TimeField(8, 0, 0))
+    quiet_hours_start = models.TimeField(default=time(22, 0))
+    quiet_hours_end = models.TimeField(default=time(8, 0))
     
     # Auto-delete settings
     auto_delete_read = models.BooleanField(default=True)

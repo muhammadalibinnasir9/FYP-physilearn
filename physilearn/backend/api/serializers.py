@@ -185,9 +185,12 @@ class StudentSerializer(serializers.ModelSerializer):
 
 
 class StudentAdminSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.CharField(source='teacher.get_full_name', read_only=True)
+    parent_name = serializers.CharField(source='parent.get_full_name', read_only=True)
+
     class Meta:
         model = Student
-        fields = ('id', 'name', 'roll_number', 'section', 'parent', 'teacher', 'is_active')
+        fields = ('id', 'name', 'roll_number', 'section', 'parent', 'parent_name', 'teacher', 'teacher_name', 'is_active')
 
 
 class AcademicTermSerializer(serializers.ModelSerializer):

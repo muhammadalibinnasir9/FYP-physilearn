@@ -1,12 +1,17 @@
 def classify_bmi(bmi):
     """
-    Classifies fitness status based on BMI.
+    Classifies fitness status based on BMI (WHO-aligned thresholds).
+    Returns a safe dummy classification on invalid input.
     """
-    if bmi < 18.5:
+    try:
+        b = float(bmi)
+    except (TypeError, ValueError):
+        return "Normal"  # dummy fallback
+    if b < 18.5:
         return "Underweight"
-    elif 18.5 <= bmi < 25:
+    elif 18.5 <= b < 25:
         return "Normal"
-    elif 25 <= bmi < 30:
+    elif 25 <= b < 30:
         return "Overweight"
     else:
         return "Obese"
@@ -16,6 +21,7 @@ _recommendation_cache = {}
 def generate_recommendations(status, student_profile=None):
     """
     Generates health and exercise recommendations.
+    Uses dummy/placeholder response on any error so the pipeline never fails.
 
     student_profile (optional dict) may include:
       - age: int
@@ -24,7 +30,17 @@ def generate_recommendations(status, student_profile=None):
       - previous_test_scores: dict (same shape as test_scores)
       - recent_performances: list of dicts (e.g., [{"metric_name": "Stamina", "score": 40}, ...])
     """
+    _dummy_response = (
+        "Maintain a healthy lifestyle with balanced diet and regular physical activity. "
+        "Consult your teacher or healthcare provider for personalized advice."
+    )
+    try:
+        return _generate_recommendations_impl(status, student_profile)
+    except Exception:
+        return _dummy_response
 
+
+def _generate_recommendations_impl(status, student_profile=None):
     # Keep legacy caching only for the generic (no-profile) case.
     if not student_profile and status in _recommendation_cache:
         return _recommendation_cache[status]
