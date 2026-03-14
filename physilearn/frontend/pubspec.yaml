@@ -18,6 +18,11 @@ dependencies:
   path_provider: ^2.1.5
   open_filex: ^4.7.0
   flutter_secure_storage: ^10.0.0
+  web: ^1.1.1
+  google_fonts: ^6.1.0
+  shimmer: ^3.0.0
+  printing: ^5.11.0
+  pdf: ^3.10.4
 
 dev_dependencies:
   flutter_test:
