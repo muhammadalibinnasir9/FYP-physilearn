@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60">
+  <defs>
+    <linearGradient id="iconGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0D47A1;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00BFA5;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <path d="M25,15 Q30,10 35,15 Q40,20 45,15 Q50,10 55,15 L55,45 Q50,50 45,45 Q40,40 35,45 Q30,50 25,45 Z" fill="url(#iconGradient)"/>
+  <circle cx="40" cy="10" r="5" fill="#0D47A1"/>
+  
+  <text x="65" y="42" font-family="Poppins, sans-serif" font-weight="bold" font-size="28" fill="#0D47A1">Physi</text>
+  <text x="135" y="42" font-family="Poppins, sans-serif" font-weight="300" font-size="28" fill="#00BFA5">Learn</text>
+</svg>
